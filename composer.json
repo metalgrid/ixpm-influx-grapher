@@ -1,0 +1,26 @@
+{
+    "name": "metalgrid/ixpm-influx-grapher",
+    "description": "InfluxDB Grapher for IXP Manager",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Metalgrid\\InfluxGrapher\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Metalgrid\\InfluxGrapher\\Providers\\InfluxGrapherProvider"
+            ]
+        }
+    },
+    "authors": [
+        {
+            "name": "Iskren Hadzhinedev",
+            "email": "i.hadzhinedev@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {}
+}
