@@ -14,6 +14,11 @@ use IXP\Contracts\Grapher\Backend as GrapherBackendContract;
 
 class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
 {
+    private $protocol = [
+        'ipv4' => 'IPv4',
+        'ipv6' => 'IPv6',
+    ];
+
     public function name(): string
     {
         return 'influx';
@@ -85,7 +90,10 @@ class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
                     Graph::CATEGORY_PACKETS => Graph::CATEGORY_PACKETS
                 ],
                 'periods'     => Graph::PERIODS,
-                'types'       => [Graph::TYPE_JSON => Graph::TYPE_JSON],
+                'types'       => [
+                    Graph::TYPE_JSON => Graph::TYPE_JSON,
+                    Graph::TYPE_LOG => Graph::TYPE_LOG
+                ],
             ],
         ];
     }
@@ -102,6 +110,8 @@ class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
             'dvli' => $dstvli,
         ] = $graph->getParamsAsArray();
 
+        $protocol = $this->protocol[$protocol];
+
         [
             'url' => $url,
             'username' => $username,
@@ -109,46 +119,47 @@ class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
             'database' => $db,
             'measurement' => $measurement,
             'retention-policy' => $rp,
-        ] = config('grapher.backends.influxdb');
+        ] = config('grapher.backends.influx');
 
         $now = Carbon::now();
         $now->minute($now->minute - $now->minute % 5);
         $now->second(0);
-        $to = $now->getTimestampMs();
+        $to = $now->toISOString();
         $aggregate = "5m";
         switch ($period) {
             case 'day':
-                $from = $now->subDay()->getTimestampMs();
+                $from = $now->subDay()->toISOString();
                 break;
             case 'week':
-                $from = $now->subWeek()->getTimestampMs();
+                $from = $now->subWeek()->toISOString();
                 break;
             case 'month':
-                $from = $now->subMonth()->getTimestampMs();
+                $from = $now->subMonth()->toISOString();
                 break;
             case 'year':
-                $from = $now->subYear()->getTimestampMs();
+                $from = $now->subYear()->toISOString();
                 $aggregate = "24h";
                 break;
             default:
                 throw new \DateException("Invalid period: {$period}");
         }
 
+        // srcvli and dstvli are reversed because ... reasons.
         $query = <<<END_QUERY
         SELECT
             mean({$category})
         FROM
             "$rp"."$measurement"
         WHERE
-                dstvli::tag = '$dstvli'
+                srcvli::tag = '$dstvli'
             AND
-                srcvli::tag = '$srcvli'
+                dstvli::tag = '$srcvli'
             AND
                 protocol::tag = '$protocol'
             AND
-                time > {$from}
+                time > '{$from}'
             AND
-                time < {$to}
+                time < '{$to}'
         GROUP BY
             time($aggregate)
         END_QUERY;
@@ -159,12 +170,23 @@ class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
             'db' => $db,
             'q' => $query
         ]);
+
         try {
             $response = Http::withBasicAuth($username, $password)->get($url . '?' . $q);
-            $data = $response->json();
+            if ($response->failed()) {
+                Log::warning("[Grapher] {$this->name()} data(): InfluxDB request failed: {$response->status()}");
+                return [];
+            }
 
+            $data = $response->json();
             $timestamps = [];
             $bits = [];
+
+            if (!array_key_exists('series', $data['results'][0])) {
+                Log::warning("[Grapher] {$this->name()} data(): InfluxDB response has no series!");
+                Log::notice("[Influx] Query: {$query}");
+                return [];
+            }
 
             foreach ($data['results'][0]['series'] as $series) {
                 $points = $series['values'];
@@ -175,16 +197,18 @@ class InfluxGrapher extends GrapherBackend implements GrapherBackendContract
                 }
             }
 
-            return json_encode([
+            return [
                 "labels" => $timestamps,
-                "datasets" => $protocol,
-                "data" => $bits,
-                "backgroundColor" => "rgba(255, 99, 132, 0.2)",
-                "borderColor" => "rgba(255,88,132,1)",
-                "borderWidth" => 1,
-                "fill" => true,
-                "stack" => "stacked"
-            ]);
+                "datasets" => [[
+                    "label" => $protocol,
+                    "data" => $bits,
+                    "backgroundColor" => "rgba(115, 191, 105, 0.2)",
+                    "borderColor" => "rgba(115, 191, 105,1)",
+                    "borderWidth" => 1,
+                    "fill" => true,
+                    "stack" => "stacked"
+                ]]
+            ];
         } catch (Exception $e) {
             Log::notice("[Grapher] {$this->name()} data(): could not fetch graph data: {$e}");
             return [];
